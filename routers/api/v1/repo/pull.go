@@ -1183,6 +1183,13 @@ func parseCompareInfo(ctx *context.APIContext, form api.CreatePullRequestOption)
 		return nil, nil, nil, nil, "", ""
 	}
 
+	if !(len(compareInfo.Commits) > 0) {
+		headGitRepo.Close()
+		ctx.Error(http.StatusUnprocessableEntity, "EmptyPullRequest",
+			fmt.Sprintf("no commits between %v:%v and %v:%v", baseRepo.Owner.Name, baseBranch, headUser.Name, headBranch))
+		return nil, nil, nil, nil, "", ""
+	}
+
 	return headUser, headRepo, headGitRepo, compareInfo, baseBranch, headBranch
 }
 
