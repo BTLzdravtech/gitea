@@ -75,7 +75,7 @@ func CompareDiff(ctx *context.APIContext) {
 	apiCommits := make([]*api.Commit, 0, len(compareResult.compareInfo.Commits))
 	userCache := make(map[string]*user_model.User)
 	for i := 0; i < len(compareResult.compareInfo.Commits); i++ {
-		apiCommit, err := convert.ToCommit(ctx, ctx.Repo.Repository, ctx.Repo.GitRepo, compareResult.compareInfo.Commits[i], userCache,
+		apiCommit, err := convert.ToCommit(ctx, compareResult.headRepo, compareResult.headGitRepo, compareResult.compareInfo.Commits[i], userCache,
 			convert.ToCommitOptions{
 				Stat:         true,
 				Verification: verification,
