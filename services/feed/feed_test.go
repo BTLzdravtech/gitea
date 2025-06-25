@@ -30,7 +30,7 @@ func TestGetFeeds(t *testing.T) {
 	assert.NoError(t, err)
 	if assert.Len(t, actions, 1) {
 		assert.EqualValues(t, 1, actions[0].ID)
-		assert.EqualValues(t, user.ID, actions[0].UserID)
+		assert.Equal(t, user.ID, actions[0].UserID)
 	}
 	assert.Equal(t, int64(1), count)
 
@@ -107,7 +107,7 @@ func TestGetFeeds2(t *testing.T) {
 	assert.Len(t, actions, 1)
 	if assert.Len(t, actions, 1) {
 		assert.EqualValues(t, 2, actions[0].ID)
-		assert.EqualValues(t, org.ID, actions[0].UserID)
+		assert.Equal(t, org.ID, actions[0].UserID)
 	}
 	assert.Equal(t, int64(1), count)
 
@@ -147,7 +147,7 @@ func TestRepoActions(t *testing.T) {
 	assert.NoError(t, unittest.PrepareTestDatabase())
 	repo := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 1})
 	_ = db.TruncateBeans(db.DefaultContext, &activities_model.Action{})
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		_ = db.Insert(db.DefaultContext, &activities_model.Action{
 			UserID:    2 + int64(i),
 			ActUserID: 2,

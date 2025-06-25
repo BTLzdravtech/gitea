@@ -97,9 +97,9 @@ func Test_MoveColumnsOnProject(t *testing.T) {
 	columnsAfter, err := project1.GetColumns(db.DefaultContext)
 	assert.NoError(t, err)
 	assert.Len(t, columnsAfter, 3)
-	assert.EqualValues(t, columns[1].ID, columnsAfter[0].ID)
-	assert.EqualValues(t, columns[2].ID, columnsAfter[1].ID)
-	assert.EqualValues(t, columns[0].ID, columnsAfter[2].ID)
+	assert.Equal(t, columns[1].ID, columnsAfter[0].ID)
+	assert.Equal(t, columns[2].ID, columnsAfter[1].ID)
+	assert.Equal(t, columns[0].ID, columnsAfter[2].ID)
 }
 
 func Test_NewColumn(t *testing.T) {
@@ -110,7 +110,7 @@ func Test_NewColumn(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Len(t, columns, 3)
 
-	for i := 0; i < maxProjectColumns-3; i++ {
+	for i := range maxProjectColumns - 3 {
 		err := NewColumn(db.DefaultContext, &Column{
 			Title:     fmt.Sprintf("column-%d", i+4),
 			ProjectID: project1.ID,

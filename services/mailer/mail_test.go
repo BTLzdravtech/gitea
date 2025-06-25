@@ -467,7 +467,7 @@ func TestFromDisplayName(t *testing.T) {
 		t.Run(tc.userDisplayName, func(t *testing.T) {
 			user := &user_model.User{FullName: tc.userDisplayName, Name: "tmp"}
 			got := fromDisplayName(user)
-			assert.EqualValues(t, tc.fromDisplayName, got)
+			assert.Equal(t, tc.fromDisplayName, got)
 		})
 	}
 
@@ -484,7 +484,7 @@ func TestFromDisplayName(t *testing.T) {
 			setting.Domain = oldDomain
 		}()
 
-		assert.EqualValues(t, "Mister X (by Code IT on [code.it])", fromDisplayName(&user_model.User{FullName: "Mister X", Name: "tmp"}))
+		assert.Equal(t, "Mister X (by Code IT on [code.it])", fromDisplayName(&user_model.User{FullName: "Mister X", Name: "tmp"}))
 	})
 }
 
@@ -528,7 +528,7 @@ func TestEmbedBase64Images(t *testing.T) {
 		require.NoError(t, err)
 
 		mailBody := msgs[0].Body
-		assert.Regexp(t, `MSG-BEFORE <a[^>]+><img src="data:image/png;base64,iVBORw0KGgo="/></a> MSG-AFTER`, mailBody)
+		assert.Regexp(t, `MSG-BEFORE <a[^>]+><img src="data:image/png;base64,iVBORw0KGgo=".*/></a> MSG-AFTER`, mailBody)
 	})
 
 	t.Run("EmbedInstanceImageSkipExternalImage", func(t *testing.T) {

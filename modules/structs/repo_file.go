@@ -4,6 +4,8 @@
 
 package structs
 
+import "time"
+
 // FileOptions options for all file APIs
 type FileOptions struct {
 	// message (optional) for the commit of this file. if not supplied, a default message will be used
@@ -64,6 +66,8 @@ func (o *UpdateFileOptions) Branch() string {
 	return o.FileOptions.BranchName
 }
 
+// FIXME: ChangeFileOperation.SHA is NOT required for update or delete if last commit is provided in the options.
+
 // ChangeFileOperation for creating, updating or deleting a file
 type ChangeFileOperation struct {
 	// indicates what to do with the file
@@ -115,12 +119,21 @@ type FileLinksResponse struct {
 	HTMLURL *string `json:"html"`
 }
 
+type ContentsExtResponse struct {
+	FileContents *ContentsResponse   `json:"file_contents,omitempty"`
+	DirContents  []*ContentsResponse `json:"dir_contents,omitempty"`
+}
+
 // ContentsResponse contains information about a repo's entry's (dir, file, symlink, submodule) metadata and content
 type ContentsResponse struct {
 	Name          string `json:"name"`
 	Path          string `json:"path"`
 	SHA           string `json:"sha"`
 	LastCommitSHA string `json:"last_commit_sha"`
+	// swagger:strfmt date-time
+	LastCommitterDate time.Time `json:"last_committer_date"`
+	// swagger:strfmt date-time
+	LastAuthorDate time.Time `json:"last_author_date"`
 	// `type` will be `file`, `dir`, `symlink`, or `submodule`
 	Type string `json:"type"`
 	Size int64  `json:"size"`
@@ -137,6 +150,9 @@ type ContentsResponse struct {
 	// `submodule_git_url` is populated when `type` is `submodule`, otherwise null
 	SubmoduleGitURL *string            `json:"submodule_git_url"`
 	Links           *FileLinksResponse `json:"_links"`
+
+	LfsOid  *string `json:"lfs_oid"`
+	LfsSize *int64  `json:"lfs_size"`
 }
 
 // FileCommitResponse contains information generated from a Git commit for a repo's file.
@@ -169,4 +185,9 @@ type FileDeleteResponse struct {
 	Content      any                        `json:"content"` // to be set to nil
 	Commit       *FileCommitResponse        `json:"commit"`
 	Verification *PayloadCommitVerification `json:"verification"`
+}
+
+// GetFilesOptions options for retrieving metadate and content of multiple files
+type GetFilesOptions struct {
+	Files []string `json:"files" binding:"Required"`
 }

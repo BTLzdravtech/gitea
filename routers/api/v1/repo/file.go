@@ -16,16 +16,18 @@ import (
 
 	git_model "code.gitea.io/gitea/models/git"
 	repo_model "code.gitea.io/gitea/models/repo"
-	"code.gitea.io/gitea/models/unit"
 	"code.gitea.io/gitea/modules/git"
 	"code.gitea.io/gitea/modules/gitrepo"
 	"code.gitea.io/gitea/modules/httpcache"
+	"code.gitea.io/gitea/modules/json"
 	"code.gitea.io/gitea/modules/lfs"
 	"code.gitea.io/gitea/modules/log"
 	"code.gitea.io/gitea/modules/setting"
 	"code.gitea.io/gitea/modules/storage"
 	api "code.gitea.io/gitea/modules/structs"
+	"code.gitea.io/gitea/modules/util"
 	"code.gitea.io/gitea/modules/web"
+	"code.gitea.io/gitea/routers/api/v1/utils"
 	"code.gitea.io/gitea/routers/common"
 	"code.gitea.io/gitea/services/context"
 	pull_service "code.gitea.io/gitea/services/pull"
@@ -375,7 +377,7 @@ func GetEditorconfig(ctx *context.APIContext) {
 	//   required: true
 	// - name: ref
 	//   in: query
-	//   description: "The name of the commit/branch/tag. Default the repository’s default branch (usually master)"
+	//   description: "The name of the commit/branch/tag. Default to the repository’s default branch."
 	//   type: string
 	//   required: false
 	// responses:
@@ -408,11 +410,6 @@ func canWriteFiles(ctx *context.APIContext, branch string) bool {
 	return ctx.Repo.CanWriteToBranch(ctx, ctx.Doer, branch) &&
 		!ctx.Repo.Repository.IsMirror &&
 		!ctx.Repo.Repository.IsArchived
-}
-
-// canReadFiles returns true if repository is readable and user has proper access level.
-func canReadFiles(r *context.Repository) bool {
-	return r.Permission.CanRead(unit.TypeCode)
 }
 
 func base64Reader(s string) (io.ReadSeeker, error) {
@@ -473,6 +470,9 @@ func ChangeFiles(ctx *context.APIContext) {
 			ctx.APIError(http.StatusUnprocessableEntity, err)
 			return
 		}
+		// FIXME: actually now we support more operations like "rename", "upload"
+		// FIXME: ChangeFileOperation.SHA is NOT required for update or delete if last commit is provided in the options.
+		// Need to fully fix them in API
 		changeRepoFile := &files_service.ChangeRepoFile{
 			Operation:     file.Operation,
 			TreePath:      file.Path,
@@ -661,7 +661,7 @@ func UpdateFile(ctx *context.APIContext) {
 	//     "$ref": "#/responses/repoArchivedError"
 	apiOpts := web.GetForm(ctx).(*api.UpdateFileOptions)
 	if ctx.Repo.Repository.IsEmpty {
-		ctx.APIError(http.StatusUnprocessableEntity, fmt.Errorf("repo is empty"))
+		ctx.APIError(http.StatusUnprocessableEntity, errors.New("repo is empty"))
 		return
 	}
 
@@ -894,11 +894,23 @@ func DeleteFile(ctx *context.APIContext) {
 	}
 }
 
-// GetContents Get the metadata and contents (if a file) of an entry in a repository, or a list of entries if a dir
-func GetContents(ctx *context.APIContext) {
-	// swagger:operation GET /repos/{owner}/{repo}/contents/{filepath} repository repoGetContents
+func resolveRefCommit(ctx *context.APIContext, ref string, minCommitIDLen ...int) *utils.RefCommit {
+	ref = util.IfZero(ref, ctx.Repo.Repository.DefaultBranch)
+	refCommit, err := utils.ResolveRefCommit(ctx, ctx.Repo.Repository, ref, minCommitIDLen...)
+	if errors.Is(err, util.ErrNotExist) {
+		ctx.APIErrorNotFound(err)
+	} else if err != nil {
+		ctx.APIErrorInternal(err)
+	}
+	return refCommit
+}
+
+func GetContentsExt(ctx *context.APIContext) {
+	// swagger:operation GET /repos/{owner}/{repo}/contents-ext/{filepath} repository repoGetContentsExt
 	// ---
-	// summary: Gets the metadata and contents (if a file) of an entry in a repository, or a list of entries if a dir
+	// summary: The extended "contents" API, to get file metadata and/or content, or list a directory.
+	// description: It guarantees that only one of the response fields is set if the request succeeds.
+	//              Users can pass "includes=file_content" or "includes=lfs_metadata" to retrieve more fields.
 	// produces:
 	// - application/json
 	// parameters:
@@ -919,7 +931,66 @@ func GetContents(ctx *context.APIContext) {
 	//   required: true
 	// - name: ref
 	//   in: query
-	//   description: "The name of the commit/branch/tag. Default the repository’s default branch (usually master)"
+	//   description: the name of the commit/branch/tag, default to the repository’s default branch.
+	//   type: string
+	//   required: false
+	// - name: includes
+	//   in: query
+	//   description: By default this API's response only contains file's metadata. Use comma-separated "includes" options to retrieve more fields.
+	//                Option "file_content" will try to retrieve the file content, option "lfs_metadata" will try to retrieve LFS metadata.
+	//   type: string
+	//   required: false
+	// responses:
+	//   "200":
+	//     "$ref": "#/responses/ContentsExtResponse"
+	//   "404":
+	//     "$ref": "#/responses/notFound"
+
+	opts := files_service.GetContentsOrListOptions{TreePath: ctx.PathParam("*")}
+	for includeOpt := range strings.SplitSeq(ctx.FormString("includes"), ",") {
+		if includeOpt == "" {
+			continue
+		}
+		switch includeOpt {
+		case "file_content":
+			opts.IncludeSingleFileContent = true
+		case "lfs_metadata":
+			opts.IncludeLfsMetadata = true
+		default:
+			ctx.APIError(http.StatusBadRequest, fmt.Sprintf("unknown include option %q", includeOpt))
+			return
+		}
+	}
+	ctx.JSON(http.StatusOK, getRepoContents(ctx, opts))
+}
+
+// GetContents Get the metadata and contents (if a file) of an entry in a repository, or a list of entries if a dir
+func GetContents(ctx *context.APIContext) {
+	// swagger:operation GET /repos/{owner}/{repo}/contents/{filepath} repository repoGetContents
+	// ---
+	// summary: Gets the metadata and contents (if a file) of an entry in a repository, or a list of entries if a dir.
+	// description: This API follows GitHub's design, and it is not easy to use. Recommend to use our "contents-ext" API instead.
+	// produces:
+	// - application/json
+	// parameters:
+	// - name: owner
+	//   in: path
+	//   description: owner of the repo
+	//   type: string
+	//   required: true
+	// - name: repo
+	//   in: path
+	//   description: name of the repo
+	//   type: string
+	//   required: true
+	// - name: filepath
+	//   in: path
+	//   description: path of the dir, file, symlink or submodule in the repo
+	//   type: string
+	//   required: true
+	// - name: ref
+	//   in: query
+	//   description: "The name of the commit/branch/tag. Default to the repository’s default branch."
 	//   type: string
 	//   required: false
 	// responses:
@@ -927,34 +998,35 @@ func GetContents(ctx *context.APIContext) {
 	//     "$ref": "#/responses/ContentsResponse"
 	//   "404":
 	//     "$ref": "#/responses/notFound"
-
-	if !canReadFiles(ctx.Repo) {
-		ctx.APIErrorInternal(repo_model.ErrUserDoesNotHaveAccessToRepo{
-			UserID:   ctx.Doer.ID,
-			RepoName: ctx.Repo.Repository.LowerName,
-		})
+	ret := getRepoContents(ctx, files_service.GetContentsOrListOptions{TreePath: ctx.PathParam("*"), IncludeSingleFileContent: true})
+	if ctx.Written() {
 		return
 	}
+	ctx.JSON(http.StatusOK, util.Iif[any](ret.FileContents != nil, ret.FileContents, ret.DirContents))
+}
 
-	treePath := ctx.PathParam("*")
-	ref := ctx.FormTrim("ref")
-
-	if fileList, err := files_service.GetContentsOrList(ctx, ctx.Repo.Repository, treePath, ref); err != nil {
+func getRepoContents(ctx *context.APIContext, opts files_service.GetContentsOrListOptions) *api.ContentsExtResponse {
+	refCommit := resolveRefCommit(ctx, ctx.FormTrim("ref"))
+	if ctx.Written() {
+		return nil
+	}
+	ret, err := files_service.GetContentsOrList(ctx, ctx.Repo.Repository, ctx.Repo.GitRepo, refCommit, opts)
+	if err != nil {
 		if git.IsErrNotExist(err) {
 			ctx.APIErrorNotFound("GetContentsOrList", err)
-			return
+			return nil
 		}
 		ctx.APIErrorInternal(err)
-	} else {
-		ctx.JSON(http.StatusOK, fileList)
 	}
+	return &ret
 }
 
 // GetContentsList Get the metadata of all the entries of the root dir
 func GetContentsList(ctx *context.APIContext) {
 	// swagger:operation GET /repos/{owner}/{repo}/contents repository repoGetContentsList
 	// ---
-	// summary: Gets the metadata of all the entries of the root dir
+	// summary: Gets the metadata of all the entries of the root dir.
+	// description: This API follows GitHub's design, and it is not easy to use. Recommend to use our "contents-ext" API instead.
 	// produces:
 	// - application/json
 	// parameters:
@@ -970,7 +1042,7 @@ func GetContentsList(ctx *context.APIContext) {
 	//   required: true
 	// - name: ref
 	//   in: query
-	//   description: "The name of the commit/branch/tag. Default the repository’s default branch (usually master)"
+	//   description: "The name of the commit/branch/tag. Default to the repository’s default branch."
 	//   type: string
 	//   required: false
 	// responses:
@@ -981,4 +1053,103 @@ func GetContentsList(ctx *context.APIContext) {
 
 	// same as GetContents(), this function is here because swagger fails if path is empty in GetContents() interface
 	GetContents(ctx)
+}
+
+func GetFileContentsGet(ctx *context.APIContext) {
+	// swagger:operation GET /repos/{owner}/{repo}/file-contents repository repoGetFileContents
+	// ---
+	// summary: Get the metadata and contents of requested files
+	// description: See the POST method. This GET method supports to use JSON encoded request body in query parameter.
+	// produces:
+	// - application/json
+	// parameters:
+	// - name: owner
+	//   in: path
+	//   description: owner of the repo
+	//   type: string
+	//   required: true
+	// - name: repo
+	//   in: path
+	//   description: name of the repo
+	//   type: string
+	//   required: true
+	// - name: ref
+	//   in: query
+	//   description: "The name of the commit/branch/tag. Default to the repository’s default branch."
+	//   type: string
+	//   required: false
+	// - name: body
+	//   in: query
+	//   description: "The JSON encoded body (see the POST request): {\"files\": [\"filename1\", \"filename2\"]}"
+	//   type: string
+	//   required: true
+	// responses:
+	//   "200":
+	//     "$ref": "#/responses/ContentsListResponse"
+	//   "404":
+	//     "$ref": "#/responses/notFound"
+
+	// POST method requires "write" permission, so we also support this "GET" method
+	handleGetFileContents(ctx)
+}
+
+func GetFileContentsPost(ctx *context.APIContext) {
+	// swagger:operation POST /repos/{owner}/{repo}/file-contents repository repoGetFileContentsPost
+	// ---
+	// summary: Get the metadata and contents of requested files
+	// description: Uses automatic pagination based on default page size and
+	// 							max response size and returns the maximum allowed number of files.
+	//							Files which could not be retrieved are null. Files which are too large
+	//							are being returned with `encoding == null`, `content == null` and `size > 0`,
+	//							they can be requested separately by using the `download_url`.
+	// produces:
+	// - application/json
+	// parameters:
+	// - name: owner
+	//   in: path
+	//   description: owner of the repo
+	//   type: string
+	//   required: true
+	// - name: repo
+	//   in: path
+	//   description: name of the repo
+	//   type: string
+	//   required: true
+	// - name: ref
+	//   in: query
+	//   description: "The name of the commit/branch/tag. Default to the repository’s default branch."
+	//   type: string
+	//   required: false
+	// - name: body
+	//   in: body
+	//   required: true
+	//   schema:
+	//     "$ref": "#/definitions/GetFilesOptions"
+	// responses:
+	//   "200":
+	//     "$ref": "#/responses/ContentsListResponse"
+	//   "404":
+	//     "$ref": "#/responses/notFound"
+
+	// This is actually a "read" request, but we need to accept a "files" list, then POST method seems easy to use.
+	// But the permission system requires that the caller must have "write" permission to use POST method.
+	// At the moment there is no other way to get around the permission check, so there is a "GET" workaround method above.
+	handleGetFileContents(ctx)
+}
+
+func handleGetFileContents(ctx *context.APIContext) {
+	opts, ok := web.GetForm(ctx).(*api.GetFilesOptions)
+	if !ok {
+		err := json.Unmarshal(util.UnsafeStringToBytes(ctx.FormString("body")), &opts)
+		if err != nil {
+			ctx.APIError(http.StatusBadRequest, "invalid body parameter")
+			return
+		}
+	}
+	refCommit := resolveRefCommit(ctx, ctx.FormTrim("ref"))
+	if ctx.Written() {
+		return
+	}
+	filesResponse := files_service.GetContentsListFromTreePaths(ctx, ctx.Repo.Repository, ctx.Repo.GitRepo, refCommit, opts.Files)
+	ctx.JSON(http.StatusOK, util.SliceNilAsEmpty(filesResponse))
 }
